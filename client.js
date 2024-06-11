@@ -166,10 +166,6 @@ class RemoteStreamer extends EventTarget {
         }
     }
 
-    onsignalingMessage(message){
-
-    }
-
     sendHello(){
         const payload = btoa(JSON.stringify({
             res: this.platform.getResolution(),
@@ -179,7 +175,7 @@ class RemoteStreamer extends EventTarget {
     }
 
     sendJson(type, data){
-        if(this.ws.readyState != WebSocket.OPEN){
+        if(!this.ws || this.ws.readyState != WebSocket.OPEN){
             // add to queue
             console.warn("WebSocket not open, queueing message",type,data);
             this.messageQueue.push(JSON.stringify({
@@ -201,12 +197,12 @@ class RemoteStreamer extends EventTarget {
 
     onWebSocketClose(){
         if(this.state == "signaling_connected"){
-            this.state = "signaling";
-            // TODO: attempt reconnect
+            thid.queueResignal();
         }
     }
 
     queueResignal(){
+        this.setStatus("Queuing signaling reconnect");
         if(!this.resignal){
             this.resignal = setTimeout(() => {
                 this.resignal = null;
@@ -216,6 +212,7 @@ class RemoteStreamer extends EventTarget {
     }
     
     catchup(){
+        this.setStatus("Flushing WebSocket message queue");
         if(this.wsMessageQueue.length > 0){
             this.wsMessageQueue.forEach(message => {
                 this.ws.send(message);
