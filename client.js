@@ -418,7 +418,7 @@ class RemoteStreamer extends EventTarget {
 }
 
 const defaultInputConfig = {
-
+    resizeDebounce: 100
 };
 
 const ABSOLUTE_MOUSE_TYPE = "m";
@@ -448,8 +448,15 @@ class RemoteInput extends EventTarget {
      * @memberof RemoteInput
      */
     element = null;
+    /**
+     * @type {HTMLElement}
+     * @memberof RemoteInput
+     */
+    container = null;
 
     mouseMask = 0;
+
+    resizeTimeout = null;
 
     validateConfig(config){
         
@@ -464,6 +471,10 @@ class RemoteInput extends EventTarget {
         this.remoteClient = remoteClient;
         this.element = element;
         this.registerEvents(element);
+    }
+
+    setContainer(container){
+        this.container = container;
     }
 
     registerEvents(element){
@@ -483,6 +494,30 @@ class RemoteInput extends EventTarget {
         this.keyboard.onkeyup = (keysym) => {
             this.sendDataChannelMessage("ku," + keysym);
         };
+        this.platform.addEventListener("resize", this.resize.bind(this));
+    }
+
+    resize(event){
+        if(this.resizeTimeout){
+            clearTimeout(this.resizeTimeout);
+        }
+        this.resizeTimeout = setTimeout(this.resizeEnd.bind(this), this.config.resizeDebounce || 100);
+    }
+
+    resizeEnd(event){
+        if(this.resizeTimeout){
+            clearTimeout(this.resizeTimeout);
+            this.resizeTimeout = null;
+        }
+
+        if(this.container){
+            const rect = this.container.getBoundingClientRect();
+            const newResolution = rect.width + "x" + rect.height;
+            console.log("Resizing to",newResolution);
+            this.sendDataChannelMessage("_arg_resize,1," + newResolution);
+            this.sendDataChannelMessage("r," + newResolution);
+            this.sendDataChannelMessage("s," + this.platform.getPixelRatio());
+        }
     }
 
     keyCanceler(event){

@@ -21,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const clickgrabberEl = document.getElementById('clickgrabber');
     const videoEl = document.getElementById('video');
     const audioEl = document.getElementById('audio');
+    const contentEl = document.getElementById('content');
 
     function enableClickGrabber(){
         clickgrabberEl.classList.remove("hidden");
@@ -39,6 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
      */
     const input = new RemoteInput(config);
     input.attach(client, videoEl);
+    input.setContainer(contentEl);
 
     client.addEventListener("elementGotStream", () => {
         updateStatus("Click anywhere to play stream");
