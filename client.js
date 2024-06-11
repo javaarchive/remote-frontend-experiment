@@ -35,12 +35,26 @@ class DefaultPlatformAdapter extends EventTarget {
 
 const defaultConfig = {
     verbose: false,
-    peer_id: 1
+    peer_id: 1,
+    rtcConfig: {
+        lifetimeDuration: "86400s",
+        // https://github.com/selkies-project/selkies-gstreamer/blob/acd2e46067ba56bc87414c461832b66a36089693/addons/gst-web/src/webrtc.js#L76C30-L87C10
+        iceServers: [
+            {
+                urls: [
+                    "stun:stun.l.google.com:19302"
+                ]
+            },
+        ],
+        blockStatus: "NOT_BLOCKED",
+        iceTransportPolicy: "all"
+    }
 }
 class RemoteStreamer extends EventTarget {
 
     signaling = false;
     state = "uninitialized";
+    wsMessageQueue = [];
 
     constructor(config){
         super();
@@ -71,14 +85,88 @@ class RemoteStreamer extends EventTarget {
         }
     }
 
+    setupRtcPeerConnection(){
+        this.peerConnection = new RTCPeerConnection(this.config.rtcConfig);
+        this.peerConnection.onicecandidate = this.onPeerIceCanidate.bind(this);
+        this.peerConnection.ontrack = this.onTrack.bind(this);
+        this.peerConnection.ondatachannel = this.onDataChannel.bind(this);
+        this.peerConnection.onconnectionstatechange = this.onConnectionStateChange.bind(this);
+    }
+
+    onConnectionDisconnected(){
+        this.state = "disconnected";
+        this.dispatchEvent(new CustomEvent('stateChange'));
+    }
+
+    onConnectionFailed(){
+        this.state = "disconnected";
+        this.dispatchEvent(new CustomEvent('stateChange'));
+    }
+
+    cleanupRtcPeerConnection(){
+        if(this.dataChannel){
+            try{
+                this.dataChannel.close();
+            }catch(ex){
+
+            }
+        }
+    }
+
+    onConnectionStateChange(event){
+        this.dispatchEvent(new CustomEvent('connectionStateChange', {
+            detail: event
+        }));
+        let state = this.peerConnection.connectionState;
+        // https://github.com/selkies-project/selkies-gstreamer/blob/acd2e46067ba56bc87414c461832b66a36089693/addons/gst-web/src/webrtc.js#L446
+        switch (state) {
+            case "connected":
+                this.state = "connected";
+                break;
+
+            case "disconnected":
+                this.onConnectionDisconnected();
+                break;
+
+            case "failed":
+                this.onConnectionFailed();
+                break;
+            default:
+        }
+    }
+
+    onTrack(event){
+        const track = event.track;
+
+    }
+
+    onDataChannel(event){
+    }
+
+    onPeerIceCanidate(event){
+        if (event.candidate === null) {
+            return;
+        }
+    }
+
+    removeRtcPeerConnection(){
+        if(this.peerConnection){
+            this.peerConnection.close();
+        }
+        this.peerConnection = null;
+    }
+
     start(){
+        if(!this.peerConnection){
+            this.setupRtcPeerConnection();
+        }
         if(this.state == "uninitialized" && !this.signaling){
             this.signaling = true;
             this.startSignaling();
         }
     }
 
-    onSignallingMessage(message){
+    onsignalingMessage(message){
 
     }
 
@@ -91,6 +179,14 @@ class RemoteStreamer extends EventTarget {
     }
 
     sendJson(type, data){
+        if(this.ws.readyState != WebSocket.OPEN){
+            // add to queue
+            console.warn("WebSocket not open, queueing message",type,data);
+            this.messageQueue.push(JSON.stringify({
+                [type]: data
+            }));
+            return;
+        }
         this.ws.send(JSON.stringify({
             [type]: data
         }));
@@ -118,14 +214,24 @@ class RemoteStreamer extends EventTarget {
             }, 1000);
         }
     }
+    
+    catchup(){
+        if(this.wsMessageQueue.length > 0){
+            this.wsMessageQueue.forEach(message => {
+                this.ws.send(message);
+            });
+            this.wsMessageQueue = [];
+        }
+    }
 
     onWebSocketMessage(ev){
         const data = ev.data;
         if(data === "HELLO"){
             this.setStatus("Got HELLO message from WebSocket.");
-            console.log("Signalling WebSocket server sent HELLO");
+            console.log("signaling WebSocket server sent HELLO");
+            this.catchup();
         }else if(data.startsWith("ERROR")){
-            console.error("Signalling WebSocket server sent error",data);
+            console.error("signaling WebSocket server sent error",data);
             this.dispatchEvent(new CustomEvent('error', {
                 detail: data
             }));
@@ -134,7 +240,7 @@ class RemoteStreamer extends EventTarget {
             }));
         }else{
             let payload = JSON.parse(data);
-            this.dispatchEvent(new CustomEvent('signallingMessage', {
+            this.dispatchEvent(new CustomEvent('signalingMessage', {
                 detail: payload
             }));
             this.onSignalingPayload(payload);
@@ -142,7 +248,24 @@ class RemoteStreamer extends EventTarget {
     }
 
     onSignalingPayload(payload){
-        
+        if(payload.sdp){
+            this.onSignalingSdp(payload.sdp);
+        }else if(payload.ice){
+            this.onSignalingIce(payload.ice);
+        }
+    }
+
+    onSignalingSdp(sdp){
+        this.dispatchEvent(new CustomEvent('signalingSdp', {
+            sdp: sdp
+        }));
+    }
+
+    onSignalingIce(canid_json){
+        this.dispatchEvent(new CustomEvent('signalingIce', {
+            detail: canid_json
+        }));
+        this.peerConnection.addIceCandidate(new RTCIceCandidate(canid_json));
     }
 
     onWebSocketError(ev){
