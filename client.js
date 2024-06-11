@@ -55,6 +55,7 @@ class RemoteStreamer extends EventTarget {
     signaling = false;
     state = "uninitialized";
     wsMessageQueue = [];
+    tracks = [];
 
     constructor(config){
         super();
@@ -136,9 +137,33 @@ class RemoteStreamer extends EventTarget {
     }
 
     onTrack(event){
-        this.setStatus("Received track");
+        this.setStatus("Received a track of type " + event.track.kind + " track: " + event.track);
+        /**
+         * @type {MediaStreamTrack}
+         */
         const track = event.track;
+        /**
+         * @type {MediaStream[]}
+         */
+        const streams = event.streams;
+        this.tracks.push([track, streams]);
+        this.dispatchEvent(new CustomEvent('track', {
+            detail: {
+                track,
+                streams
+            }
+        }));
+        if(this.element){
+            this.setStatus("Attaching track to existing element")
+            this.element.srcObject = streams[0];
+            this.onElementGotStream();
+        }
+    }
 
+    onElementGotStream(){
+        this.setStatus("Element got a stream");
+        this.dispatchEvent(new CustomEvent('elementGotStream'));
+        // frontend should hande clicking play
     }
 
     onDataChannel(event){
@@ -159,7 +184,7 @@ class RemoteStreamer extends EventTarget {
     }
 
     sendDataChannelMessage(data){
-        if(this.dataChannel && this.dataChannel.readyState == "open"){
+        if(this.canSendDataChannelMessage()){
             this.dataChannel.send(data);
         }else{
             console.warn("Data channel not open, message lost");
@@ -177,10 +202,21 @@ class RemoteStreamer extends EventTarget {
         }
     }
 
+    sendPong(){
+        console.log("Sending pong");
+        this.sendDataChannelMessage("pong," + (Date.now() / 1000));
+    }
+
     onDataChannelPayload(payload){
         switch(payload.type){
             case "ping":
-                this.sendDataChannelMessage()
+                this.sendPong();
+                break;
+            case "systemaction":
+                let action = payload.action;
+                this.dispatchEvent(new CustomEvent('systemAction', {
+                    detail: action
+                }));
                 break;
             default:
         }
@@ -190,13 +226,25 @@ class RemoteStreamer extends EventTarget {
         if (event.candidate === null) {
             return;
         }
+        this.sendSignalingJson("ice", event.candidate);
     }
-
+    /**
+     * Resets RTC part
+     */
     removeRtcPeerConnection(){
         if(this.peerConnection){
             this.peerConnection.close();
         }
         this.peerConnection = null;
+        this.tracks = [];
+        if(this.dataChannel){
+            try{
+                this.dataChannel.close();
+            }catch(ex){
+                // silently ignored
+            }
+            this.dataChannel = null;
+        }
     }
 
     start(){
@@ -209,6 +257,16 @@ class RemoteStreamer extends EventTarget {
         }
     }
 
+    linkElement(element = null){
+        this.element = element;
+        // if existing tracks are there
+        if(this.tracks.length > 0){
+            let streams = this.tracks[0][1];
+            this.element.srcObject = streams[0];
+            this.onElementGotStream();
+        }
+    }
+
     sendHello(){
         const payload = btoa(JSON.stringify({
             res: this.platform.getResolution(),
@@ -217,7 +275,7 @@ class RemoteStreamer extends EventTarget {
         this.ws.send(`HELLO ${this.config.peer_id} ${payload}`)
     }
 
-    sendJson(type, data){
+    sendSignalingJson(type, data){
         if(!this.ws || this.ws.readyState != WebSocket.OPEN){
             // add to queue
             console.warn("WebSocket not open, queueing message",type,data);
@@ -314,7 +372,7 @@ class RemoteStreamer extends EventTarget {
             sdp: answer
         }));
         await this.peerConnection.setLocalDescription(answer);
-        this.sendJson("sdp", answer);
+        this.sendSignalingJson("sdp", answer);
     }
 
     onSignalingIce(canid_json){
@@ -353,7 +411,107 @@ class RemoteStreamer extends EventTarget {
         this.ws.addEventListener('message', this.onWebSocketMessage.bind(this));
         this.ws.addEventListener('error', this.onWebSocketError.bind(this));
     }
+
+    canSendDataChannelMessage(){
+        return this.dataChannel && this.dataChannel.readyState == "open";
+    }
+}
+
+const defaultInputConfig = {
+
+};
+
+const ABSOLUTE_MOUSE_TYPE = "m";
+const RELATIVE_MOUSE_TYPE = "m2";
+
+class RemoteInput extends EventTarget {
+    constructor(config){
+        super();
+        this.config = {
+            ...defaultInputConfig,
+            ...config
+        };
+        if(!this.config.platform){
+            this.config.platform = new DefaultPlatformAdapter();
+        }
+        this.validateConfig(this.config);
+        /**
+         * @type {DefaultPlatformAdapter}
+         */
+        this.platform = this.config.platform;
+    }
+
+    active = true;
+
+    /**
+     * @type {HTMLElement}
+     * @memberof RemoteInput
+     */
+    element = null;
+
+    mouseMask = 0;
+
+    validateConfig(config){
+        
+    }
+
+    /**
+     * 
+     *
+     * @param {RemoteClient} remoteClient
+     */
+    attach(remoteClient, element){
+        this.remoteClient = remoteClient;
+        this.element = element;
+        this.registerEvents(element);
+    }
+
+    registerEvents(element){
+        this.element.addEventListener("mousedown", this.handleMouseEvent.bind(this));
+        this.element.addEventListener("mouseup", this.handleMouseEvent.bind(this));
+        this.element.addEventListener("mousemove", this.handleMouseEvent.bind(this));
+        this.element.addEventListener("contextmenu", this.contextMenu.bind(this));
+    }
+
+    contextMenu(event){
+        event.preventDefault();
+    }
+
+    handleMouseEvent(event){
+        const down = (event.type === 'mousedown' ? 1 : 0);
+        const button = event.button;
+        const buttonMask = (1 << button);
+        if(down){
+            this.mouseMask |= buttonMask;
+        }else {
+            this.mouseMask &= ~buttonMask;
+        }
+        // diff mouse x,y logic I took from a personal project
+        // this may cause issues, please report if found
+        let x = event.pageX - event.currentTarget.offsetLeft;
+        let y = event.pageY - event.currentTarget.offsetTop;
+        
+        this.sendMouseEvent(ABSOLUTE_MOUSE_TYPE, x, y, this.mouseMask);
+    }
+
+    formatMouseEvent(type, x, y, buttonMask, _ = "0"){
+        return `${type},${x},${y},${buttonMask}`;
+    }
+
+    sendMouseEvent(type, x, y, mask){
+        this.sendDataChannelMessage(this.formatMouseEvent(type, x, y, mask));
+    }
+
+    sendDataChannelMessage(data){
+        if(this.remoteClient.canSendDataChannelMessage()){
+            this.remoteClient.sendDataChannelMessage(data);
+        }
+        // drop
+    }
+
+
 }
 
 // allows use in the browser
 window.RemoteClient = RemoteStreamer;
+window.RemoteInput = RemoteInput;

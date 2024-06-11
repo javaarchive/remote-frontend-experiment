@@ -18,7 +18,38 @@ document.addEventListener('DOMContentLoaded', () => {
         statusEl.innerText = message;
     }
 
+    const clickgrabberEl = document.getElementById('clickgrabber');
+    const videoEl = document.getElementById('video');
+    const audioEl = document.getElementById('audio');
+
+    function enableClickGrabber(){
+        clickgrabberEl.classList.remove("hidden");
+    }
+
+    function disableClickGrabber(){
+        clickgrabberEl.classList.add("hidden");
+    }
+
     updateStatus("Connecting to WebSocket");
+
+    client.linkElement(videoEl);
+
+    /**
+     * @type {RemoteInput}
+     */
+    const input = new RemoteInput(config);
+    input.attach(client, videoEl);
+
+    client.addEventListener("elementGotStream", () => {
+        updateStatus("Click anywhere to play stream");
+        enableClickGrabber();
+    });
+
+    clickgrabberEl.addEventListener("click", () => {
+        videoEl.play();
+        audioEl.play();
+        disableClickGrabber();
+    });
 
     client.addEventListener("status", (ev) => {
         updateStatus(ev.detail);
