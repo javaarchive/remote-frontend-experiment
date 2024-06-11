@@ -470,11 +470,31 @@ class RemoteInput extends EventTarget {
         this.element.addEventListener("mousedown", this.handleMouseEvent.bind(this));
         this.element.addEventListener("mouseup", this.handleMouseEvent.bind(this));
         this.element.addEventListener("mousemove", this.handleMouseEvent.bind(this));
+
         this.element.addEventListener("contextmenu", this.contextMenu.bind(this));
+
+        this.element.addEventListener("keydown", this.handleKeyEvent.bind(this));
+        this.element.addEventListener("keyup", this.handleKeyEvent.bind(this));
+
+        this.keyboard = new Guacamole.Keyboard(window);
+        this.keyboard.onkeydown = (keysym) => {
+            this.sendDataChannelMessage("kd," + keysym);
+        };
+        this.keyboard.onkeyup = (keysym) => {
+            this.sendDataChannelMessage("ku," + keysym);
+        };
+    }
+
+    keyCanceler(event){
+        // TODO
     }
 
     contextMenu(event){
         event.preventDefault();
+    }
+
+    handleKeyEvent(event){
+        const down = (event.type === 'keydown' ? 1 : 0);
     }
 
     handleMouseEvent(event){
@@ -490,7 +510,7 @@ class RemoteInput extends EventTarget {
         // this may cause issues, please report if found
         let x = event.pageX - event.currentTarget.offsetLeft;
         let y = event.pageY - event.currentTarget.offsetTop;
-        
+
         this.sendMouseEvent(ABSOLUTE_MOUSE_TYPE, x, y, this.mouseMask);
     }
 
