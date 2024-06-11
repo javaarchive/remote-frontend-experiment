@@ -136,11 +136,54 @@ class RemoteStreamer extends EventTarget {
     }
 
     onTrack(event){
+        this.setStatus("Received track");
         const track = event.track;
 
     }
 
     onDataChannel(event){
+        this.setStatus("Received data channel");
+        this.dataChannel = event.channel;
+        this.dataChannel.onopen = this.onDataChannelOpen.bind(this);
+        this.dataChannel.onclose = this.onDataChannelClose.bind(this);
+        this.dataChannel.onmessage = this.onDataChannelMessage.bind(this);
+    }
+
+    onDataChannelOpen(event){
+        this.setStatus("Data channel opened");
+    }
+
+    onDataChannelClose(event){
+        this.setStatus("Data channel closed");
+        this.dataChannel = null;
+    }
+
+    sendDataChannelMessage(data){
+        if(this.dataChannel && this.dataChannel.readyState == "open"){
+            this.dataChannel.send(data);
+        }else{
+            console.warn("Data channel not open, message lost");
+            this.setStatus("Data channel not open, messages are not be delivered.");
+        }
+    }
+
+    onDataChannelMessage(event){
+        const data = event.data;
+        try{
+            const payload = JSON.parse(data);
+            this.onDataChannelPayload(payload);
+        }catch(ex){
+            console.error("Error parsing data channel message",data,ex);
+        }
+    }
+
+    onDataChannelPayload(payload){
+        switch(payload.type){
+            case "ping":
+                this.sendDataChannelMessage()
+                break;
+            default:
+        }
     }
 
     onPeerIceCanidate(event){
@@ -252,13 +295,30 @@ class RemoteStreamer extends EventTarget {
         }
     }
 
-    onSignalingSdp(sdp){
+    async onSignalingSdp(sdp){
         this.dispatchEvent(new CustomEvent('signalingSdp', {
             sdp: sdp
         }));
+        if(sdp.type != "offer") {
+            console.warn("Received SDP of type",sdp.type,"ignoring");
+            return;
+        }
+        this.setStatus("Received SDP");
+        this.dispatchEvent(new CustomEvent('signalingSdpOffer', {
+            sdp: sdp
+        }));
+        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+        let answer = await this.peerConnection.createAnswer();
+        this.setStatus("Setting SDP answer");
+        this.dispatchEvent(new CustomEvent('signalingSdpAnswer', {
+            sdp: answer
+        }));
+        await this.peerConnection.setLocalDescription(answer);
+        this.sendJson("sdp", answer);
     }
 
     onSignalingIce(canid_json){
+        console.log("signalingIce",canid_json);
         this.dispatchEvent(new CustomEvent('signalingIce', {
             detail: canid_json
         }));
